@@ -2,7 +2,7 @@
 
 Protótipo em Python da JOVI StudyLens, funcionalidade desenvolvida para o smartphone JOVI voltada ao estudante em tempo integral. O sistema transforma registros fotográficos feitos em sala de aula (lousas, slides e cadernos) em material de estudo organizado, pesquisável e reutilizável, acessível pelo terminal.
 
-> **Challenge FIAP 2026 | Sprint 3 | Python**
+> **Challenge FIAP 2026 | Sprint 4 | Python**
 
 ---
 
@@ -29,28 +29,28 @@ Eliminar a dor do estudante que acumula fotos de aula na galeria do celular sem 
 
 - **Digitalizar** — registra o conteúdo de lousas, slides e cadernos com título e matéria
 - **Copiar** — copia o texto de qualquer material direto para a área de transferência
-- **Traduzir** — traduz conteúdos do Português para o Inglês via Google Translator, com opção de salvar na biblioteca
-- **Biblioteca** — acessa, filtra por matéria, busca por palavra-chave e lê os materiais salvos
+- **Traduzir** — traduz conteúdos do Português para o Inglês via API do MyMemory (até 500 caracteres), com histórico salvo e opção de salvar na biblioteca
+- **Biblioteca** — acessa, filtra por matéria, busca por palavra-chave, lê e resume os materiais salvos
 
 ---
 
 ## 🛠️ Tecnologias utilizadas
 
 - Python 3.12
-- [deep-translator](https://pypi.org/project/deep-translator/) — tradução via Google Translator
+- [requests](https://pypi.org/project/requests/) — chamada à API de tradução do [MyMemory](https://mymemory.translated.net/doc/spec.php)
 - [pyperclip](https://pypi.org/project/pyperclip/) — copia para área de transferência
-- [rich](https://pypi.org/project/rich/) - aprimora interface visual no terminal
+- [rich](https://pypi.org/project/rich/) — aprimora interface visual no terminal
 
 ---
 
 ## 🚀 Como instalar e rodar
 
-**Pré-requisitos:** Python 3.10 ou superior instalado.
+**Pré-requisitos:** Python 3.10 ou superior instalado e conexão com a internet (para a tradução).
 
 1. Clone o repositório:
 ```bash
-git clone https://github.com/lauramirilli/sprint2_python.git
-cd sprint2_python
+git clone https://github.com/lauramirilli/sprint4-python.git
+cd sprint4-python
 ```
 
 2. Instale as dependências:
@@ -86,7 +86,7 @@ A interação é feita pelo terminal. Ao iniciar, o menu principal oferece as 4 
 ## 📁 Estrutura do projeto
 
 ```
-sprint2_python/
+sprint4-python/
 ├── app.py                    # Código principal
 ├── materiais.json            # Persistência dos materiais adicionados pelo usuário
 ├── historico_traducoes.json  # Persistência das traduções realizadas pelo usuário

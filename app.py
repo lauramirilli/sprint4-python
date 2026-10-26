@@ -1,12 +1,12 @@
 import json
+from pathlib import Path
 
-from deep_translator import MyMemoryTranslator
-from deep_translator.exceptions import TooManyRequests
 import pyperclip
-
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.panel import Panel
+import requests
 
 console = Console()
 
@@ -16,8 +16,13 @@ Material = dict[str, str | int]
 
 # PERSISTÊNCIA (arquivos JSON)
 
-ARQUIVO_MATERIAIS = "materiais.json"
-ARQUIVO_HISTORICO = "historico_traducoes.json"
+# Caminhos relativos à pasta do app.py, para funcionar de qualquer diretório
+PASTA_PROJETO = Path(__file__).parent
+ARQUIVO_MATERIAIS = PASTA_PROJETO / "materiais.json"
+ARQUIVO_HISTORICO = PASTA_PROJETO / "historico_traducoes.json"
+
+# Limite de caracteres por requisição da API gratuita do MyMemory
+LIMITE_TRADUCAO = 500
 
 # Conteúdo padrão usado apenas se o arquivo materiais.json não existir
 # ou estiver corrompido (fallback de segurança).
@@ -45,8 +50,15 @@ def carregar_materiais() -> list[Material]:
     corrompido, recria com os dados padrão."""
     try:
         with open(ARQUIVO_MATERIAIS, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
-    except (FileNotFoundError, json.JSONDecodeError):
+            dados = json.load(arquivo)
+        # Garante que é uma lista de materiais com todos os campos esperados
+        campos = {"id", "titulo", "materia", "tipo", "conteudo", "idioma"}
+        if not isinstance(dados, list) or not all(
+            isinstance(material, dict) and campos <= material.keys() for material in dados
+        ):
+            raise ValueError("estrutura inválida")
+        return dados
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
         salvar_materiais(MATERIAIS_PADRAO)
         return [dict(material) for material in MATERIAIS_PADRAO]
 
@@ -62,8 +74,11 @@ def carregar_historico() -> list[dict[str, str]]:
     ou estiver corrompido, recria vazio."""
     try:
         with open(ARQUIVO_HISTORICO, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
-    except (FileNotFoundError, json.JSONDecodeError):
+            dados = json.load(arquivo)
+        if not isinstance(dados, list):
+            raise ValueError("estrutura inválida")
+        return dados
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
         salvar_historico([])
         return []
 
@@ -74,15 +89,12 @@ def carregar_historico() -> list[dict[str, str]]:
 # Estrutura: {"id", "titulo", "materia", "tipo", "conteudo", "idioma"}
 materiais: list[Material] = carregar_materiais()
 
-# Histórico de traduções realizadas na sessão
+# Histórico de traduções realizadas (persistido entre sessões)
 historico_traducoes: list[dict[str, str]] = carregar_historico()
 
 # Contador de ID para novos materiais (calculado a partir do que já existe,
 # para não colidir com IDs salvos em sessões anteriores)
 proximo_id: int = max((material["id"] for material in materiais), default=0) + 1
-
-# Saída para menu principal
-saida: str = 'sair'
 
 # Matérias disponíveis para organização
 MATERIAS_DISPONIVEIS: list[str] = [
@@ -140,10 +152,11 @@ def input_validado(
             return "sair"
 
         if tipo == "int":
-            if not entrada.lstrip("-").isdigit():
+            try:
+                valor = int(entrada)
+            except ValueError:
                 console.print("  [bold red]!![/bold red]  Digite apenas números inteiros.")
                 continue
-            valor = int(entrada)
             if min_val is not None and valor < min_val:
                 console.print(f"  [bold red]!![/bold red]  Valor mínimo: {min_val}.")
                 continue
@@ -172,10 +185,10 @@ def buscar_material_por_id(id_busca: int) -> Material | None:
 def exibir_conteudo_material(material: Material) -> None:
     """Exibe o conteúdo completo de um material (mesmo formato da leitura)."""
     linha()
-    console.print(f"\n    [bold cyan]{material['titulo']}[/bold cyan]")
+    console.print(f"\n    [bold cyan]{escape(material['titulo'])}[/bold cyan]")
     console.print(f"    [dim]{material['materia']}  |  {material['tipo'].capitalize()}  |  {material['idioma']}[/dim]")
     linha("-")
-    console.print(f"\n  {material['conteudo']}\n")
+    console.print(f"\n  {escape(material['conteudo'])}\n")
     linha()
 
 
@@ -190,11 +203,12 @@ def perguntar_acesso_material(lista: list[Material]) -> None:
         if not escolha:
             return
 
-        if not escolha.isdigit():
+        try:
+            id_escolhido = int(escolha)
+        except ValueError:
             console.print("\n  [bold red]!![/bold red]  ID inválido.")
             continue
 
-        id_escolhido = int(escolha)
         material = next((m for m in lista if m["id"] == id_escolhido), None)
         if not material:
             console.print(f"\n  [bold red]!![/bold red]  ID {escolha} não está nesta lista.")
@@ -286,7 +300,7 @@ def digitalizar_foto() -> None:
     console.print(f"\n [bold]ID       :[/bold] {novo_material['id']}")
     console.print(f" [bold]Matéria  :[/bold] {materia}")
     console.print(f" [bold]Tipo     :[/bold] {tipo_material.capitalize()}")
-    console.print(f" [bold]Título   :[/bold] {titulo_mat}")
+    console.print(f" [bold]Título   :[/bold] {escape(titulo_mat)}")
     console.print(f"\n [dim]Conteúdo salvo ({len(conteudo)} caracteres).[/dim]")
     linha()
 
@@ -300,6 +314,10 @@ def copiar_conteudo() -> None:
     imagens capturadas, facilitando o uso e reaproveitamento do conteúdo.
     """
     titulo("COPIAR CONTEÚDO")
+    if not materiais:
+        console.print("\n  [bold red]!![/bold red]  Biblioteca vazia. Digitalize um material primeiro.")
+        pausar()
+        return
     exibir_lista_materiais(materiais)
     aviso_sair()
     id_mat = input_validado(
@@ -316,9 +334,14 @@ def copiar_conteudo() -> None:
         return
 
     texto = material["conteudo"]
-    pyperclip.copy(texto)
-    conteudo = pyperclip.paste()
-    console.print(f"[bold green]Conteúdo copiado:[/bold green] {conteudo}")
+    try:
+        pyperclip.copy(texto)
+    except pyperclip.PyperclipException:
+        # Ex.: Linux sem xclip/xsel instalado
+        console.print("\n  [bold red]!![/bold red]  Área de transferência indisponível neste sistema.")
+        pausar()
+        return
+    console.print(f"\n  [bold green]✔ Conteúdo copiado:[/bold green] {escape(texto)}")
 
     pausar()
 
@@ -351,7 +374,6 @@ def traduzir_conteudo() -> None:
     origem_titulo = "Texto avulso"
     origem_materia = "Outro"
 
-    aviso_sair()
     if fonte == "1":
         console.print("\n  Digite o texto em Português para traduzir:\n")
         texto_original = input_validado("  Texto: ")
@@ -380,25 +402,35 @@ def traduzir_conteudo() -> None:
         origem_titulo = material["titulo"]
         origem_materia = material["materia"]
 
-    try:
-        texto_traduzido = MyMemoryTranslator(source='pt-BR', target='en-US').translate(texto_original)
-    except TooManyRequests:
+    if len(texto_original) > LIMITE_TRADUCAO:
         console.print(
-            "\n  [bold red]!![/bold red]  O serviço de tradução está recebendo muitas "
-            "requisições no momento. Aguarde alguns segundos e tente novamente."
+            f"\n  [bold red]!![/bold red]  O texto tem {len(texto_original)} caracteres; "
+            f"o serviço de tradução aceita no máximo {LIMITE_TRADUCAO}."
         )
         pausar()
         return
-    except Exception as erro:
+
+    try:
+        resposta = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": texto_original, "langpair": "pt-BR|en-US"},
+            timeout=10,
+        )
+        resposta.raise_for_status()
+        dados = resposta.json()
+        if int(dados["responseStatus"]) != 200:
+            raise ValueError(dados["responseDetails"])
+        texto_traduzido = dados["responseData"]["translatedText"]
+    except (requests.exceptions.RequestException, ValueError, KeyError) as erro:
         console.print(f"\n  [bold red]!![/bold red]  Não foi possível traduzir agora: {erro}")
         pausar()
         return
 
     # Exibe resultado
     linha()
-    console.print(f"\n [bold cyan]ORIGINAL:[/bold cyan]\n  {texto_original}\n")
+    console.print(f"\n [bold cyan]ORIGINAL:[/bold cyan]\n  {escape(texto_original)}\n")
     linha("-")
-    console.print(f"\n [bold green]TRADUÇÃO (EN):[/bold green]\n  {texto_traduzido}\n")
+    console.print(f"\n [bold green]TRADUÇÃO (EN):[/bold green]\n  {escape(texto_traduzido)}\n")
     linha()
 
     # Salva no histórico
@@ -470,7 +502,7 @@ def minha_biblioteca() -> None:
     elif opc == "2":
         console.print("\n  [bold]Matérias disponíveis na biblioteca:[/bold]\n")
         # Coleta matérias únicas dos materiais salvos
-        materias_salvas = list({material["materia"] for material in materiais})
+        materias_salvas = sorted({material["materia"] for material in materiais})
         for i, material in enumerate(materias_salvas, 1):
             console.print(f"  [bold cyan]\\[{i}][/bold cyan] {material}")
 
@@ -499,11 +531,11 @@ def minha_biblioteca() -> None:
             if termo in material["titulo"].lower() or termo in material["conteudo"].lower()
         ]
         if encontrados:
-            console.print(f"\n  [bold]{len(encontrados)} resultado(s) para '{termo}':[/bold]")
+            console.print(f"\n  [bold]{len(encontrados)} resultado(s) para '{escape(termo)}':[/bold]")
             exibir_lista_materiais(encontrados)
             perguntar_acesso_material(encontrados)
         else:
-            console.print(f"\n    [dim]Nenhum material encontrado com '{termo}'.[/dim]")
+            console.print(f"\n    [dim]Nenhum material encontrado com '{escape(termo)}'.[/dim]")
             pausar()
         return
 
@@ -519,12 +551,7 @@ def minha_biblioteca() -> None:
             return
         material = buscar_material_por_id(id_leitura)
         if material:
-            linha()
-            console.print(f"\n    [bold cyan]{material['titulo']}[/bold cyan]")
-            console.print(f"    [dim]{material['materia']}  |  {material['tipo'].capitalize()}  |  {material['idioma']}[/dim]")
-            linha("-")
-            console.print(f"\n  {material['conteudo']}\n")
-            linha()
+            exibir_conteudo_material(material)
         else:
             console.print(f"\n  [bold red]!![/bold red]  Material ID {id_leitura} não encontrado.")
 
@@ -540,7 +567,10 @@ def minha_biblioteca() -> None:
             return
         material = buscar_material_por_id(id_leitura)
 
-        if material["id"] == 1:
+        if not material:
+            console.print(f"\n  [bold red]!![/bold red]  Material ID {id_leitura} não encontrado.")
+
+        elif material["id"] == 1:
             console.print("    [bold]Brasil Colônia:[/bold] Período de exploração por Portugal (1500–1822), "
             "baseado na extração de recursos e trabalho escravizado.")
 
@@ -564,7 +594,7 @@ def exibir_lista_materiais(lista: list[Material]) -> None:
     tabela.add_column("MATÉRIA", width=22)
     tabela.add_column("TIPO")
     for m in lista:
-        tabela.add_row(str(m["id"]), m["titulo"][:31], m["materia"][:21], m["tipo"].capitalize())
+        tabela.add_row(str(m["id"]), escape(m["titulo"][:31]), m["materia"][:21], m["tipo"].capitalize())
     console.print(tabela)
     console.print(f"  Total: [bold]{len(lista)}[/bold] material(is).")
 
@@ -589,9 +619,9 @@ def main() -> None:
     """Ponto de entrada, loop principal do programa."""
     console.print("\n[bold cyan]" + "═" * 58 + "[/bold cyan]")
     console.print("  [bold]JOVI Study Lens  📸  Transforme imagens em conhecimento[/bold]")
-    console.print("  [dim]Challenge FIAP 2026 | Sprint 3 | Python[/dim]")
+    console.print("  [dim]Challenge FIAP 2026 | Sprint 4 | Python[/dim]")
     console.print("[bold cyan]" + "═" * 58 + "[/bold cyan]")
-    console.print("\n  Bem-vindo! 3 materiais de exemplo já estão na biblioteca.")
+    console.print(f"\n  Bem-vindo! Sua biblioteca tem {len(materiais)} material(is).")
 
     while True:
         console.print()
@@ -599,7 +629,7 @@ def main() -> None:
 
         opcao = input_validado(
             "  ➤ Escolha uma opção: ",
-            tipo="int", min_val=0, max_val=4
+            tipo="int", min_val=0, max_val=4, permite_sair=False
         )
 
         match opcao:
